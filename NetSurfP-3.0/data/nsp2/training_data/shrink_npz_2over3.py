@@ -9,10 +9,10 @@ from pathlib import Path
 import numpy as np
 from math import ceil
 
-# ========= 可调参数 =========
-FRACTION = 2/3          # 目标比例：2/3
-SHUFFLE = True          # 是否随机抽样（True 更均衡；False 取前 2/3）
-SEED = 42               # 随机种子，保证可复现
+
+FRACTION = 0.3
+SHUFFLE = True
+SEED = 42
 # ==========================
 
 def shrink_one(in_path: Path) -> Path:
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     root = Path(__file__).resolve().parent
     print(f"[INFO] scan: {root}")
     for f in sorted(root.glob("*.npz")):
-        # 跳过已经是缩小/转换过的
+
         if any(tag in f.stem for tag in ["_fp32", "_p"]):
             print(f"[SKIP] {f.name}")
             continue
