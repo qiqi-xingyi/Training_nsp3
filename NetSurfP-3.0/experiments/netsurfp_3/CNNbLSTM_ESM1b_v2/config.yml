@@ -73,10 +73,10 @@ optimizer:
     weight_decay: 0
 
 training:
-  early_stop: 3
-  epochs: 1
+  early_stop: 5
+  epochs: 100
   monitor: min val_loss
-  save_period: 1
+  save_period: 5
   tensorboard: true
 
 lr_scheduler:
