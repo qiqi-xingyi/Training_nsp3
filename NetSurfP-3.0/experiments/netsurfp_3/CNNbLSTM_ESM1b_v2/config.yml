@@ -1,4 +1,4 @@
-name: CNNbLSTM_ESM1b_v2
+name: CNNbLSTM_ESM1b_v2_trial
 save_dir: saved/nsp3/CNNbLSTM_ESM1b_v2/
 seed: 1234
 target_devices: [0]
@@ -36,13 +36,15 @@ arch:
       pooler_dropout: 0.0
       checkpoint_transformer_block: false
       untie_weights_roberta: false
+    # 绝对路径（可把 G:/ 换成你的实际盘符）
     embedding_pretrained: "G:/Train_NSP/NetSurfP-3.0/models/esm1b_t33_650M_UR50S.pt"
 
 data_loader:
   type: NSPDataLoader
   args:
+
     train_path:
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits_small.npz"
     test_path:
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CASP12_HHblits.npz"
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CB513_HHblits.npz"
@@ -73,9 +75,9 @@ optimizer:
 
 training:
   early_stop: 3
-  epochs: 100
+  epochs: 1
   monitor: min val_loss
-  save_period: 999
+  save_period: 1
   tensorboard: true
 
 lr_scheduler:
