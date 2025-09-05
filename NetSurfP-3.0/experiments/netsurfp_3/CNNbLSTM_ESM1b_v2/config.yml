@@ -49,8 +49,8 @@ data_loader:
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CB513_HHblits_fp32.npz"
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/TS115_HHblits_fp32.npz"
     dataset_loader: NSPDataOnlyEncoding
-    batch_size: 4
-    nworkers: 2
+    batch_size: 2
+    nworkers: 0
     shuffle: true
     validation_split: 0.05
 
