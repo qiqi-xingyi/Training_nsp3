@@ -36,15 +36,15 @@ arch:
       pooler_dropout: 0.0
       checkpoint_transformer_block: false
       untie_weights_roberta: false
-    embedding_pretrained: "./models/esm1b_t33_650M_UR50S.pt"
+    embedding_pretrained: "G:\Train_NSP\NetSurfP-3.0\models\esm1b_t33_650M_UR50S.pt"
 
 data_loader:
   type: NSPDataLoader
   args:
-    train_path: [data/nsp2/training_data/Train_HHblits.npz]
-    test_path: [data/nsp2/training_data/CASP12_HHblits.npz, 
-                data/nsp2/training_data/CB513_HHblits.npz, 
-                data/nsp2/training_data/TS115_HHblits.npz]
+    train_path: [G:\Train_NSP\NetSurfP-3.0\data\nsp2\training_data\Train_HHblits.npz]
+    test_path: [G:\Train_NSP\NetSurfP-3.0\data\nsp2\training_data\CASP12_HHblits.npz,
+                G:\Train_NSP\NetSurfP-3.0\data\nsp2\training_data\CB513_HHblits.npz,
+                G:\Train_NSP\NetSurfP-3.0\data\nsp2\training_data\TS115_HHblits.npz]
     dataset_loader: NSPDataOnlyEncoding
     batch_size: 15
     nworkers: 2
@@ -59,7 +59,6 @@ metrics:
   metric_dis_mcc: 1
   metric_dis_fpr: 1
   metric_rsa: 2
-  metric_rsa: 3
   metric_asa: 2
   metric_phi: 4
   metric_psi: 5
