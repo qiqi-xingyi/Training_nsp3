@@ -42,15 +42,14 @@ arch:
 data_loader:
   type: NSPDataLoader
   args:
-
     train_path:
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits_fp32.npz"
     test_path:
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CASP12_HHblits.npz"
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CB513_HHblits.npz"
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/TS115_HHblits.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CASP12_HHblits_fp32.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CB513_HHblits_fp32.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/TS115_HHblits_fp32.npz"
     dataset_loader: NSPDataOnlyEncoding
-    batch_size: 2
+    batch_size: 4
     nworkers: 2
     shuffle: true
     validation_split: 0.05
