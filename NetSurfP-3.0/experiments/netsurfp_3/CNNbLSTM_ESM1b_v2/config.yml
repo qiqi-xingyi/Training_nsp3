@@ -73,7 +73,7 @@ optimizer:
     weight_decay: 0
 
 training:
-  early_stop: 5
+  early_stop: 20
   epochs: 100
   monitor: min val_loss
   save_period: 5
