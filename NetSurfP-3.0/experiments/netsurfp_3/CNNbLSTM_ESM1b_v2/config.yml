@@ -36,7 +36,7 @@ arch:
       pooler_dropout: 0.0
       checkpoint_transformer_block: false
       untie_weights_roberta: false
-    # 绝对路径（可把 G:/ 换成你的实际盘符）
+
     embedding_pretrained: "G:/Train_NSP/NetSurfP-3.0/models/esm1b_t33_650M_UR50S.pt"
 
 data_loader:
@@ -44,13 +44,13 @@ data_loader:
   args:
 
     train_path:
-      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits_small.npz"
+      - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/Train_HHblits.npz"
     test_path:
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CASP12_HHblits.npz"
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/CB513_HHblits.npz"
       - "G:/Train_NSP/NetSurfP-3.0/data/nsp2/training_data/TS115_HHblits.npz"
     dataset_loader: NSPDataOnlyEncoding
-    batch_size: 8
+    batch_size: 2
     nworkers: 2
     shuffle: true
     validation_split: 0.05
