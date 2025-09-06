@@ -1,136 +1,138 @@
-# --*-- coding:utf-8 --*--
-# @time: 9/3/25 11:56
-# @Author : Yuqi Zhang
-# @Email : yzhan135@kent.edu
-# @File: generate_priors.py
-#
-# Generate priors locally with NetSurfP-3 using our wrapper (Python 3.9).
-# - Input folder: data/seqs_len10/*.fasta (format: '>ID' + one-line/multi-line sequence)
-# - Outputs: runs/<RUN_ID>/inputs/*.fasta and runs/<RUN_ID>/raw/<seq_id>/results.csv|json
-
-# batch_predict.py
-import os
+# batch_predict_individual_safe.py
 import sys
-import re
-import glob
+import time
+import shutil
 import subprocess
 from pathlib import Path
-from datetime import datetime
 
-if __name__ == '__main__':
+# --- Paths ---
+ROOT = Path(__file__).resolve().parent
+SEQ_DIR = ROOT / "data" / "seqs_len10"
+RESULT_DIR = ROOT / "result"
+RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- Settings ---
+PREDICTOR = "SecondaryFeatures"  # change if your predictor class has a different name
+SEARCH_OUTPUT_FOLDERS = [
+    ROOT / "saved",
+    ROOT / "runs",
+    ROOT / "saved" / "nsp3",
+    ROOT / "nsp3" / "predict",
+]
+OUTPUT_EXTS = (".tsv", ".csv", ".txt")
 
-    PROJECT_ROOT = Path(__file__).resolve().parent
+def find_latest_checkpoint():
+    saved_root = ROOT / "saved" / "nsp3"
+    candidates = []
+    for p in saved_root.rglob("checkpoints"):
+        model = p / "model_best.pth"
+        cfg = p / "config.yml"
+        if model.exists() and cfg.exists():
+            candidates.append((model.stat().st_mtime, model, cfg))
+    if not candidates:
+        raise FileNotFoundError("No checkpoints with both model_best.pth and config.yml were found.")
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1], candidates[0][2]
 
-    SEQ_DIR = PROJECT_ROOT / "data" / "seqs_len10"
-    RESULT_DIR = PROJECT_ROOT / "result"
-    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH, CFG_PATH = find_latest_checkpoint()
+print(f"[INFO] model:  {MODEL_PATH}")
+print(f"[INFO] config: {CFG_PATH}")
 
-    # ---- 1) Find latest checkpoint folder that contains model_best.pth + config.yml
-    def find_latest_checkpoint():
-        saved_root = PROJECT_ROOT / "NetSurfP-3.0" / "saved" / "nsp3"
-        if not saved_root.exists():
-            raise FileNotFoundError(f"Cannot find {saved_root}")
-
-        candidates = []
-        for p in saved_root.rglob("checkpoints"):
-            model = p / "model_best.pth"
-            cfg = p / "config.yml"
-            if model.exists() and cfg.exists():
-                # pick the most recent by mtime of model
-                candidates.append((model.stat().st_mtime, model, cfg))
-
-        if not candidates:
-            raise FileNotFoundError("No checkpoints found with both model_best.pth and config.yml")
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        _, model_path, cfg_path = candidates[0]
-        return model_path, cfg_path
-
-    MODEL_PATH, CFG_PATH = find_latest_checkpoint()
-
-    # ---- 2) Collect FASTA files
-    FA_EXTS = (".fa", ".fasta", ".fsa")
-
-    def is_fasta_file(path: Path) -> bool:
-        if path.suffix.lower() in FA_EXTS:
-            return True
-        # Heuristic: first non-empty line starts with ">"
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if s:
-                        return s.startswith(">")
-        except Exception:
-            pass
+def is_fasta(path: Path) -> bool:
+    if path.suffix.lower() in (".fa", ".fasta", ".fsa"):
+        return True
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s:
+                    return s.startswith(">")
+    except Exception:
         return False
+    return False
 
-    fasta_files = [p for p in sorted(SEQ_DIR.iterdir()) if p.is_file() and is_fasta_file(p)]
-    if not fasta_files:
-        raise FileNotFoundError(f"No FASTA-like files found in {SEQ_DIR}")
-
-    print(f"[INFO] Using model: {MODEL_PATH}")
-    print(f"[INFO] Using config: {CFG_PATH}")
-    print(f"[INFO] Found {len(fasta_files)} FASTA files in {SEQ_DIR}")
-
-    # ---- 3) Run prediction per FASTA via NSP3 CLI
-    # README example: nsp3 predict -c config.yml -d model.pth -p "SecondaryFeatures" -i example_input.txt
-    # We capture stdout and write it to TSV files.
-    def run_predict(in_fasta: Path, out_tsv: Path):
+def try_predict_with_output_flag(in_fasta: Path, out_file: Path) -> bool:
+    """Try '--output' and then '-o'. Return True if out_file is created with content."""
+    for flag in ("--output", "-o"):
         cmd = [
-            "nsp3", "predict",
+            sys.executable, "-m", "nsp3.cli", "predict",
             "-c", str(CFG_PATH),
             "-d", str(MODEL_PATH),
-            "-p", "SecondaryFeatures",
-            "-i", str(in_fasta)
+            "-p", PREDICTOR,
+            "-i", str(in_fasta),
+            flag, str(out_file)
         ]
-        print(f"[RUN] {' '.join(cmd)}")
+        print("[RUN]", " ".join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 0:
+            return True
         if proc.returncode != 0:
-            # Bubble up error with stderr for quick diagnosis
-            raise RuntimeError(f"Prediction failed for {in_fasta.name}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
-        # Save stdout to file
-        out_tsv.write_text(proc.stdout, encoding="utf-8")
+            print(f"[WARN] predictor call failed with {flag}. stderr:\n{proc.stderr.strip()}")
+    return False
 
-    per_file_outputs = []
-    for f in fasta_files:
-        out_path = RESULT_DIR / (f.stem + ".tsv")
-        run_predict(f, out_path)
-        per_file_outputs.append(out_path)
-        print(f"[OK] Saved: {out_path}")
+def copy_latest_generated_file(since_ts: float, out_file: Path) -> bool:
+    """Search typical output folders for a new table file and copy it to out_file."""
+    candidates = []
+    for base in SEARCH_OUTPUT_FOLDERS:
+        if not base.exists():
+            continue
+        for p in base.rglob("*"):
+            if p.is_file() and p.suffix.lower() in OUTPUT_EXTS:
+                try:
+                    if p.stat().st_mtime >= since_ts:
+                        candidates.append(p)
+                except FileNotFoundError:
+                    pass
+    if not candidates:
+        return False
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    latest = candidates[0]
+    shutil.copy2(latest, out_file)
+    print(f"[INFO] copied latest result: {latest} -> {out_file}")
+    return out_file.exists() and out_file.stat().st_size > 0
 
-    # ---- 4) Merge per-file TSVs into one (simple concatenation with a header check)
-    def merge_tsvs(paths, merged_path: Path):
-        header = None
-        lines_accum = []
-        for p in paths:
-            content = p.read_text(encoding="utf-8").splitlines()
-            if not content:
-                continue
-            # First non-empty line as header; skip duplicate headers afterward
-            # Many NSP3 predictors print a header; adjust if not
-            first_non_empty = next((i for i, L in enumerate(content) if L.strip()), None)
-            if first_non_empty is None:
-                continue
-            file_header = content[first_non_empty].strip()
-            body = content[first_non_empty+1:]
+def predict_one(in_fasta: Path, out_file: Path) -> bool:
+    start_ts = time.time()
 
-            if header is None:
-                header = file_header
-            elif file_header != header:
-                # If headers differ, still proceed but keep the first as canonical.
-                pass
-            lines_accum.extend(body)
+    # 1) Preferred path: predictor supports explicit output flag
+    if try_predict_with_output_flag(in_fasta, out_file):
+        return True
 
-        if header is None:
-            # No content? create empty merged file
-            merged_path.write_text("", encoding="utf-8")
-            return
+    # 2) Fallback: run predictor without output flag, then collect from default locations
+    cmd = [
+        sys.executable, "-m", "nsp3.cli", "predict",
+        "-c", str(CFG_PATH),
+        "-d", str(MODEL_PATH),
+        "-p", PREDICTOR,
+        "-i", str(in_fasta),
+    ]
+    print("[RUN]", " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True)
 
-        merged = [header] + lines_accum
-        merged_path.write_text("\n".join(merged) + "\n", encoding="utf-8")
+    if proc.returncode != 0:
+        print(f"[ERROR] prediction failed for {in_fasta.name}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+        return False
 
-    MERGED_PATH = RESULT_DIR / "all_predictions.tsv"
-    merge_tsvs(per_file_outputs, MERGED_PATH)
-    print(f"[DONE] Merged results → {MERGED_PATH}")
+    # Try to locate a file produced during this run
+    if copy_latest_generated_file(start_ts, out_file):
+        return True
+
+    # As a last resort, persist stdout (usually logs). This indicates no structured output was detected.
+    out_file.write_text(proc.stdout, encoding="utf-8")
+    print(f"[WARN] structured prediction file not detected; wrote stdout logs to {out_file}")
+    return False
+
+# --- Scan inputs and run ---
+inputs = [p for p in sorted(SEQ_DIR.iterdir()) if p.is_file() and is_fasta(p)]
+if not inputs:
+    raise SystemExit(f"No FASTA files found in {SEQ_DIR}")
+
+for fasta in inputs:
+    out_path = RESULT_DIR / (fasta.stem + ".tsv")
+    print(f"\n=== Predict {fasta.name} -> {out_path.name} ===")
+    ok = predict_one(fasta, out_path)
+    if ok:
+        print("[OK] saved:", out_path)
+    else:
+        print("[NOTE] no structured table found for this run; see warnings above.")
+
