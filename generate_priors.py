@@ -1,50 +1,78 @@
 # generate_priors.py
 import os
 import sys
-import yaml
 import math
+import yaml
 import torch
 import importlib
 import traceback
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Tuple, List
-from nsp3.predict import SecondaryFeatures
-from Bio import SeqIO
 
+from Bio import SeqIO
+from nsp3.predict import SecondaryFeatures  # predictor class you shared
+
+# ---- Fixed paths (your exact paths) ----
 CFG_PATH = Path(r"G:\Train_NSP\NetSurfP-3.0\saved\nsp3\CNNbLSTM_ESM1b_v2\CNNbLSTM_ESM1b_v2_trial\0905-150926\checkpoints\config.yml")
 MODEL_PATH = Path(r"G:\Train_NSP\NetSurfP-3.0\saved\nsp3\CNNbLSTM_ESM1b_v2\CNNbLSTM_ESM1b_v2_trial\0905-150926\checkpoints\model_best.pth")
 INPUT_DIR = Path(r"G:\Train_NSP\data\seqs_len10")
 OUTPUT_DIR = Path(r"G:\Train_NSP\result")
 
-def load_yaml(p: Path) -> Dict[str, Any]:
-    with p.open("r", encoding="utf-8") as f:
+# ---------------- I/O helpers ----------------
+def load_yaml(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+def ensure_outdir():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+def parse_first_fasta(fp: Path) -> Tuple[str, str]:
+    recs = list(SeqIO.parse(str(fp), "fasta"))
+    if not recs:
+        raise ValueError(f"No FASTA records in {fp}")
+    rec = recs[0]
+    return rec.id, str(rec.seq).upper()
+
+def write_tsv_header(fh, n_ss8: int, n_ss3: int, n_dis: int):
+    cols = ["res_idx", "aa"]
+    cols += [f"ss8_p{i}" for i in range(n_ss8)]
+    cols += [f"ss3_p{i}" for i in range(n_ss3)]
+    cols += [f"dis_p{i}" for i in range(n_dis)]
+    cols += ["rsa", "asa", "phi", "psi"]
+    fh.write("\t".join(cols) + "\n")
+
+# ---------------- model loading ----------------
 def find_model_class(arch_type: str):
+    """
+    Dynamically locate the model class `arch_type` under nsp3.models.*
+    """
     base_pkg = "nsp3.models"
-    pkg = importlib.import_module(base_pkg)
-    common_modules = ["architectures", "nets", "models", "__init__"]
-    tried = set()
-    for mod in common_modules:
+    import pkgutil
+
+    # import nsp3.models to get its path
+    base = importlib.import_module(base_pkg)
+    base_path = Path(base.__file__).parent
+
+    # quick probes
+    for mod in ("architectures", "nets", "models", "__init__"):
         try:
             m = importlib.import_module(f"{base_pkg}.{mod}")
             if hasattr(m, arch_type):
                 return getattr(m, arch_type)
-            tried.add(f"{base_pkg}.{mod}")
         except Exception:
             pass
-    pkg_path = Path(pkg.__file__).parent
-    for py in pkg_path.rglob("*.py"):
-        mod_name = f"{base_pkg}." + ".".join(py.relative_to(pkg_path).with_suffix("").parts)
-        if mod_name in tried:
-            continue
+
+    # exhaustive walk through submodules
+    for module_info in pkgutil.walk_packages([str(base_path)], prefix=f"{base_pkg}."):
+        name = module_info.name
         try:
-            m = importlib.import_module(mod_name)
+            m = importlib.import_module(name)
             if hasattr(m, arch_type):
                 return getattr(m, arch_type)
         except Exception:
             continue
+
     raise ImportError(f"Could not find model class '{arch_type}' in package '{base_pkg}'.")
 
 def build_model_from_config(cfg: Dict[str, Any]) -> torch.nn.Module:
@@ -59,142 +87,161 @@ def build_model_from_config(cfg: Dict[str, Any]) -> torch.nn.Module:
 
 def load_checkpoint_into_model(model: torch.nn.Module, ckpt_path: Path):
     ckpt = torch.load(str(ckpt_path), map_location="cpu")
-    state_dict = ckpt.get("state_dict", ckpt)
+    state_dict = ckpt.get("state_dict", ckpt)  # allow raw state_dict as fallback
     model.load_state_dict(state_dict, strict=False)
     return ckpt
 
-def to_device(model: torch.nn.Module) -> torch.nn.Module:
+def to_device_and_eval(model: torch.nn.Module) -> torch.nn.Module:
     if torch.cuda.is_available():
         model = model.cuda()
     model.eval()
     return model
 
-def parse_first_fasta(fp: Path) -> Tuple[str, str]:
-    recs = list(SeqIO.parse(str(fp), "fasta"))
-    if not recs:
-        raise ValueError(f"No FASTA records in {fp}")
-    rec = recs[0]
-    return rec.id, str(rec.seq).upper()
-
-def ensure_outdir():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-def write_tsv_header(fh, n_ss8: int, n_ss3: int, n_dis: int):
-    cols = ["res_idx", "aa"]
-    cols += [f"ss8_p{i}" for i in range(n_ss8)]
-    cols += [f"ss3_p{i}" for i in range(n_ss3)]
-    cols += [f"dis_p{i}" for i in range(n_dis)]
-    cols += ["rsa", "asa", "phi", "psi"]
-    fh.write("\t".join(cols) + "\n")
-
-def safe_get(arr, i, default=None):
-    try:
-        return arr[i]
-    except Exception:
-        return default
-
-def to_list(x):
+# ---------------- output normalization ----------------
+def npify(x):
     if x is None:
         return None
-    if hasattr(x, "tolist"):
-        return x.tolist()
-    return x
-
-def first_number(x):
+    if isinstance(x, np.ndarray):
+        return x
     try:
-        while isinstance(x, (list, tuple, np.ndarray)):
-            if len(x) == 0:
-                return float("nan")
-            x = x[0]
-        return float(x)
+        return np.asarray(x)
     except Exception:
-        return float("nan")
+        return None
 
-def row_vector(arr, i, ncols):
-    vec = []
-    for k in range(ncols):
-        v = None
-        if arr is not None and i < len(arr):
-            try:
-                v = arr[i][k]
-            except Exception:
-                v = None
-        vec.append(first_number(v))
-    return vec
+def squeeze_leading_ones(a: np.ndarray) -> np.ndarray:
+    # drop any number of leading singleton dims: [1,L,C] -> [L,C], [1,1,L,C] -> [L,C]
+    while a.ndim >= 2 and a.shape[0] == 1:
+        a = a[0]
+    return a
 
+def normalize_to_LC(arr, L: int, default_C: int) -> np.ndarray:
+    """
+    Convert an array-like into shape [L, C].
+    Handles inputs like [1,L,C], [L,C,1], [L], [1,L], [L,1], [L,C,K=1], etc.
+    If fewer than L rows, pad with NaNs; if more, truncate to L.
+    """
+    a = npify(arr)
+    if a is None:
+        return np.full((L, default_C), np.nan, dtype=float)
+
+    a = squeeze_leading_ones(a)
+    a = np.squeeze(a)  # remove trailing singleton dims if any
+
+    if a.ndim == 1:
+        a = a.reshape((-1, 1))
+    elif a.ndim > 2:
+        last = a.shape[-1]
+        a = a.reshape((-1, last))
+
+    # now a is 2D: [N, C]
+    N, C = a.shape
+    if N > L:
+        a = a[:L]
+    elif N < L:
+        pad = np.full((L - N, C), np.nan, dtype=float)
+        a = np.vstack([a, pad])
+    return a
+
+def infer_channel_count(arr, fallback: int) -> int:
+    a = npify(arr)
+    if a is None:
+        return fallback
+    a = squeeze_leading_ones(a)
+    a = np.squeeze(a)
+    if a.ndim == 1:
+        return 1
+    try:
+        return int(a.shape[1])
+    except Exception:
+        return fallback
+
+# ---------------- prediction per FASTA ----------------
 def predict_one(model: torch.nn.Module, fasta_path: Path, out_path: Path):
+    # parse once to get length and residue letters (for 'aa' column)
     seq_id, seq = parse_first_fasta(fasta_path)
-    predictor = SecondaryFeatures(model=model, model_data=str(MODEL_PATH))
-    identifiers, sequences, preds = predictor(str(fasta_path))
-
-    flat = []
-    for batch in preds:
-        flat.append(batch)
-    n_out = len(flat[0])
-    merged = []
-    for i in range(n_out):
-        parts = [safe_get(flat[k], i) for k in range(len(flat))]
-        parts = [p for p in parts if p is not None]
-        if len(parts) == 1:
-            merged.append(parts[0])
-        else:
-            merged.append(np.concatenate(parts, axis=0))
-
-    ss8 = to_list(safe_get(merged, 0))
-    ss3 = to_list(safe_get(merged, 1))
-    dis = to_list(safe_get(merged, 2))
-    rsa_asa = to_list(safe_get(merged, 3))
-    phi = to_list(safe_get(merged, 4))
-    psi = to_list(safe_get(merged, 5))
-
     L = len(seq)
 
-    def infer_cols(arr, default_n):
-        try:
-            if arr is not None and len(arr) > 0:
-                inner = arr[0]
-                if isinstance(inner, (list, tuple, np.ndarray)):
-                    return len(inner)
-        except Exception:
-            pass
-        return default_n
+    # call the predictor; it returns (identifier, sequence, prediction)
+    predictor = SecondaryFeatures(model=model, model_data=str(MODEL_PATH))
+    identifiers, sequences, preds = predictor(str(fasta_path))
+    # preds is chunked by the predictor; flatten per head and vstack along length
+    flat_chunks: List[List[np.ndarray]] = []
+    for chunk in preds:
+        flat_chunks.append(chunk)  # each chunk: list of heads [0..5]
 
-    n_ss8 = infer_cols(ss8, 8)
-    n_ss3 = infer_cols(ss3, 3)
-    n_dis = infer_cols(dis, 2)
+    if not flat_chunks:
+        raise RuntimeError("Predictor returned no outputs.")
 
+    n_heads = len(flat_chunks[0])  # expected 6
+    merged: List[np.ndarray] = []
+    for i in range(n_heads):
+        parts = [npify(flat_chunks[k][i]) for k in range(len(flat_chunks)) if flat_chunks[k][i] is not None]
+        if not parts:
+            merged.append(None)
+            continue
+        normed = []
+        for p in parts:
+            p = squeeze_leading_ones(p)
+            p = np.squeeze(p)
+            if p.ndim == 1:
+                p = p.reshape((-1, 1))
+            elif p.ndim > 2:
+                last = p.shape[-1]
+                p = p.reshape((-1, last))
+            normed.append(p)
+        merged.append(np.vstack(normed))
+
+    # heads (best-effort semantics based on repo):
+    # 0: ss8 probabilities [L,8]
+    # 1: ss3 probabilities [L,3]
+    # 2: disorder probabilities [L,?]
+    # 3: rsa/asa (continuous) [L,1 or 2]
+    # 4: phi [L,1]
+    # 5: psi [L,1]
+    ss8 = merged[0] if len(merged) > 0 else None
+    ss3 = merged[1] if len(merged) > 1 else None
+    dis = merged[2] if len(merged) > 2 else None
+    rsa_asa = merged[3] if len(merged) > 3 else None
+    phi = merged[4] if len(merged) > 4 else None
+    psi = merged[5] if len(merged) > 5 else None
+
+    # infer channel counts, then normalize all to [L, C]
+    n_ss8 = infer_channel_count(ss8, 8)
+    n_ss3 = infer_channel_count(ss3, 3)
+    n_dis = infer_channel_count(dis, 2)
+
+    ss8 = normalize_to_LC(ss8, L, n_ss8)
+    ss3 = normalize_to_LC(ss3, L, n_ss3)
+    dis = normalize_to_LC(dis, L, n_dis)
+
+    rsa_asa = normalize_to_LC(rsa_asa, L, 2)  # if only one channel present, treat as RSA
+    if rsa_asa.shape[1] == 1:
+        rsa = rsa_asa[:, 0]
+        asa = np.full((L,), np.nan, dtype=float)
+    else:
+        rsa = rsa_asa[:, 0]
+        asa = rsa_asa[:, 1]
+
+    phi = normalize_to_LC(phi, L, 1)[:, 0]
+    psi = normalize_to_LC(psi, L, 1)[:, 0]
+
+    # write TSV
     with out_path.open("w", encoding="utf-8") as fh:
         write_tsv_header(fh, n_ss8, n_ss3, n_dis)
         for i in range(L):
-            aa = seq[i]
-
-            ss8_row = row_vector(ss8, i, n_ss8)
-            ss3_row = row_vector(ss3, i, n_ss3)
-            dis_row = row_vector(dis, i, n_dis)
-
-            rsa = first_number((rsa_asa[i] if rsa_asa is not None and i < len(rsa_asa) else None))
-            # if rsa_asa provides two channels, take the second as ASA
-            asa = float("nan")
-            if rsa_asa is not None and i < len(rsa_asa):
-                try:
-                    asa = first_number(rsa_asa[i][1])
-                except Exception:
-                    asa = float("nan")
-
-            phi_val = first_number(phi[i] if phi is not None and i < len(phi) else None)
-            psi_val = first_number(psi[i] if psi is not None and i < len(psi) else None)
-
-            row = [str(i+1), aa]
-            row += [f"{v:.6f}" for v in ss8_row]
-            row += [f"{v:.6f}" for v in ss3_row]
-            row += [f"{v:.6f}" for v in dis_row]
-            row += [f"{rsa:.6f}" if not math.isnan(rsa) else "nan"]
-            row += [f"{asa:.6f}" if not math.isnan(asa) else "nan"]
-            row += [f"{phi_val:.6f}" if not math.isnan(phi_val) else "nan"]
-            row += [f"{psi_val:.6f}" if not math.isnan(psi_val) else "nan"]
+            row = [str(i + 1), seq[i]]
+            row += [f"{v:.6f}" if not np.isnan(v) else "nan" for v in ss8[i]]
+            row += [f"{v:.6f}" if not np.isnan(v) else "nan" for v in ss3[i]]
+            row += [f"{v:.6f}" if not np.isnan(v) else "nan" for v in dis[i]]
+            row += [f"{rsa[i]:.6f}" if not np.isnan(rsa[i]) else "nan"]
+            row += [f"{asa[i]:.6f}" if not np.isnan(asa[i]) else "nan"]
+            row += [f"{phi[i]:.6f}" if not np.isnan(phi[i]) else "nan"]
+            row += [f"{psi[i]:.6f}" if not np.isnan(psi[i]) else "nan"]
             fh.write("\t".join(row) + "\n")
 
+# ---------------- main ----------------
 def main():
+    # basic checks
     if not CFG_PATH.exists():
         raise FileNotFoundError(f"config.yml not found: {CFG_PATH}")
     if not MODEL_PATH.exists():
@@ -204,11 +251,13 @@ def main():
 
     ensure_outdir()
 
+    # build model and load weights
     cfg = load_yaml(CFG_PATH)
     model = build_model_from_config(cfg)
     load_checkpoint_into_model(model, MODEL_PATH)
-    model = to_device(model)
+    model = to_device_and_eval(model)
 
+    # gather inputs
     fasta_files = [p for p in sorted(INPUT_DIR.iterdir()) if p.is_file() and p.suffix.lower() in (".fa", ".fasta", ".fsa")]
     if not fasta_files:
         raise SystemExit(f"No FASTA files found in {INPUT_DIR}")
